@@ -15,6 +15,7 @@ if __name__ == "__main__":
 
     spotify_conf = config["spotify"]
     auth = SpotifyOAuth(spotify_conf["CLIENT_ID"], spotify_conf["CLIENT_SECRET"], spotify_conf["REDIRECT_URI"], scope=SCOPE, username="666nobody666")
+    auth.refresh_access_token(auth.get_cached_token()["refresh_token"])
     spotify = Spotify(auth_manager=auth)
 
     print("Searching recent tracks")
