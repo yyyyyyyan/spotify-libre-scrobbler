@@ -14,7 +14,13 @@ if __name__ == "__main__":
     config.read(CONFIG_FILENAME)
 
     spotify_conf = config["spotify"]
-    auth = SpotifyOAuth(spotify_conf["CLIENT_ID"], spotify_conf["CLIENT_SECRET"], spotify_conf["REDIRECT_URI"], scope=SCOPE, username="666nobody666")
+    auth = SpotifyOAuth(
+        spotify_conf["CLIENT_ID"],
+        spotify_conf["CLIENT_SECRET"],
+        spotify_conf["REDIRECT_URI"],
+        scope=SCOPE,
+        username="666nobody666",
+    )
     auth.refresh_access_token(auth.get_cached_token()["refresh_token"])
     spotify = Spotify(auth_manager=auth)
 
@@ -41,7 +47,11 @@ if __name__ == "__main__":
                 "album": track["track"]["album"]["name"],
                 "track_number": track["track"].get("track_number"),
                 "duration": ceil(track["track"]["duration_ms"] / 1000),
-                "timestamp": int(datetime.strptime(track["played_at"], "%Y-%m-%dT%H:%M:%S.%f%z").timestamp())
+                "timestamp": int(
+                    datetime.strptime(
+                        track["played_at"], "%Y-%m-%dT%H:%M:%S.%f%z"
+                    ).timestamp()
+                ),
             }
             tracks.append(track_info)
         except Exception as err:
@@ -50,7 +60,7 @@ if __name__ == "__main__":
             print(track)
             exit(1)
 
-    librefm_auth = {key.lower():value for key, value in config["libre.fm"].items()}
+    librefm_auth = {key.lower(): value for key, value in config["libre.fm"].items()}
     if tracks:
         while True:
             librefm = LibreFMNetwork(**librefm_auth)
