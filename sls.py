@@ -4,6 +4,7 @@ import sys
 from argparse import ArgumentParser
 from configparser import ConfigParser
 from datetime import datetime
+from getpass import getpass
 from hashlib import md5
 from math import ceil
 
@@ -11,8 +12,49 @@ from pylast import LibreFMNetwork, SessionKeyGenerator, WSError
 from spotipy import Spotify, SpotifyOAuth
 
 
+def hash_librefm_password(password):
+    return md5(password.encode("utf8")).hexdigest()
+
+
 def init_config(**kwargs):
-    config_file = kwargs["config_file"]
+    config_filename = kwargs["config_file"]
+    config = ConfigParser()
+    print(
+        "Follow the instructions and enter the requested information to create the config file\n"
+    )
+
+    spotify_conf = dict()
+    print("-" * 27)
+    print("Configuring Spotify API:\n")
+    print(
+        "1 - Create an app on Spotify for Developers (https://developer.spotify.com/dashboard/applications)"
+    )
+    print("2 - Input the following information (available on the app page):")
+    spotify_conf["client_id"] = input("Client ID: ")
+    spotify_conf["client_secret"] = input("Client Secret: ")
+    print(
+        "3 - On the app page, click on Edit Settings, enter a URI on the Redirect URIs field and save. (Note: the URI doesn't need to be accessible. By default we use http://localhost)"
+    )
+    print("4 - Input the following information:")
+    spotify_conf["redirect_uri"] = (
+        input("Redirect URI [http://localhost]: ") or "http://localhost"
+    )
+    spotify_conf["username"] = input("Spotify username: ")
+    config["spotify"] = spotify_conf
+
+    librefm_conf = dict()
+    print("-" * 27)
+    print("Configuring Libre.fm API:\n")
+    librefm_conf["username"] = input("Libre.fm username: ")
+    librefm_conf["password_hash"] = hash_librefm_password(
+        getpass("Libre.fm password: ")
+    )
+    config["libre.fm"] = librefm_conf
+
+    print("-" * 27)
+    print(f"Saving config to {config_filename}")
+    with open(config_filename, "w") as config_file:
+        config.write(config_file)
 
 
 def save_tracks(filename, tracks):
@@ -52,14 +94,17 @@ def main(**kwargs):
     spotify = Spotify(auth_manager=auth)
 
     print("Searching recent tracks")
-    try:
-        if kwargs["search_after"]:
-            last_timestamp = int(datetime.strptime(kwargs["search_after"], kwargs["search_after_fmt"]).timestamp() * 1000)
-        else:
-            last_timestamp = kwargs["last_timestamp"] or config["spotify"]["LAST_TIMESTAMP"]
-    except KeyError:
-        print("No last-timestamp/search-after specified!")
-        sys.exit(1)
+    if kwargs["search_after"]:
+        last_timestamp = int(
+            datetime.strptime(
+                kwargs["search_after"], kwargs["search_after_fmt"]
+            ).timestamp()
+            * 1000
+        )
+    else:
+        last_timestamp = kwargs["last_timestamp"] or config["spotify"].get(
+            "LAST_TIMESTAMP"
+        )
     recent_tracks = spotify.current_user_recently_played(after=last_timestamp)
     cursors = recent_tracks["cursors"]
     last_timestamp = cursors["after"] if cursors is not None else last_timestamp
@@ -98,7 +143,11 @@ def main(**kwargs):
 
     librefm_auth = {key.lower(): value for key, value in config["libre.fm"].items()}
     librefm_auth["username"] = kwargs["librefm_user"] or librefm_auth["username"]
-    librefm_auth["password_hash"] = md5(kwargs["librefm_password"].encode("utf8")) if kwargs["librefm_password"] else librefm_auth["password_hash"]
+    librefm_auth["password_hash"] = (
+        hash_librefm_password(kwargs["librefm_password"])
+        if kwargs["librefm_password"]
+        else librefm_auth["password_hash"]
+    )
     if tracks:
         tries = 10
         while tries:
@@ -137,8 +186,7 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers()
 
     scrobble_parser = subparsers.add_parser(
-        "scrobble",
-        help="Scrobble your Spotify's recently played tracks to libre.fm",
+        "scrobble", help="Scrobble your Spotify's recently played tracks to libre.fm",
     )
     scrobble_parser.set_defaults(func=main)
     scrobble_parser.add_argument(
@@ -147,9 +195,23 @@ if __name__ == "__main__":
         default="config.ini",
         help="Config file to read script parameters (default: %(default)s)",
     )
-    scrobble_parser.add_argument("--no-write-config", dest="write_config", action="store_false", help="Don't write to config at the end")
-    scrobble_parser.add_argument("--tracks-file", default=".tracks.pickle", help="File to save non-scrobbled tracks in case of any error")
-    scrobble_parser.add_argument("--ignore-tracks-file", dest="scrobble_remaining", action="store_false", help="Don't try to scrobble remaining tracks saved on tracks-file")
+    scrobble_parser.add_argument(
+        "--no-write-config",
+        dest="write_config",
+        action="store_false",
+        help="Don't write to config at the end",
+    )
+    scrobble_parser.add_argument(
+        "--tracks-file",
+        default=".tracks.pickle",
+        help="File to save non-scrobbled tracks in case of any error",
+    )
+    scrobble_parser.add_argument(
+        "--ignore-tracks-file",
+        dest="scrobble_remaining",
+        action="store_false",
+        help="Don't try to scrobble remaining tracks saved on tracks-file",
+    )
 
     spotify_group = scrobble_parser.add_argument_group(
         "Spotify", description="Spotify related parameters"
@@ -164,7 +226,11 @@ if __name__ == "__main__":
     spotify_group.add_argument(
         "--spotify-client-secret", help="Your Spotify Client Secret"
     )
-    spotify_group.add_argument("--force-refresh-token", action="store_true", help="Force refresh your Spotify Client Token before starting the routine")
+    spotify_group.add_argument(
+        "--force-refresh-token",
+        action="store_true",
+        help="Force refresh your Spotify Client Token before starting the routine",
+    )
     last_played = spotify_group.add_mutually_exclusive_group()
     last_played.add_argument(
         "--last-timestamp",
@@ -199,11 +265,13 @@ if __name__ == "__main__":
     init_parser.set_defaults(func=init_config)
 
     help_parser = subparsers.add_parser(
-        "help",
-        help="Show the complete help message for all commands",
-        add_help=False,
+        "help", help="Show the complete help message for all commands", add_help=False,
     )
-    help_parser.set_defaults(func=lambda **kwargs: print(f"{scrobble_parser.format_help()}\n{'-'*27}\n{init_parser.format_help()}"))
+    help_parser.set_defaults(
+        func=lambda **kwargs: print(
+            f"{scrobble_parser.format_help()}\n{'-'*27}\n{init_parser.format_help()}"
+        )
+    )
 
     args = parser.parse_args()
     kwargs = vars(args)
