@@ -1,41 +1,75 @@
+import os
+import pickle
+import sys
+from argparse import ArgumentParser
 from configparser import ConfigParser
 from datetime import datetime
+from hashlib import md5
 from math import ceil
-from sys import exit
 
-from pylast import LibreFMNetwork, SessionKeyGenerator
+from pylast import LibreFMNetwork, SessionKeyGenerator, WSError
 from spotipy import Spotify, SpotifyOAuth
 
-CONFIG_FILENAME = "config.ini"
-SCOPE = "user-read-recently-played"
 
-if __name__ == "__main__":
+def init_config(**kwargs):
+    config_file = kwargs["config_file"]
+
+
+def save_tracks(filename, tracks):
+    with open(filename, "wb") as pickle_file:
+        pickle.dump(tracks, pickle_file, pickle.HIGHEST_PROTOCOL)
+
+
+def main(**kwargs):
+    config_file = kwargs["config"]
+    if len(sys.argv) <= 2 and not os.path.isfile(config_file):
+        print(f"Default config file ({config_file}) not found and no arguments passed")
+        print("Run the following command to generate a config file:")
+        print(f"\t{sys.argv[0]} init")
+        sys.exit(1)
+
     config = ConfigParser()
-    config.read(CONFIG_FILENAME)
+    if os.path.isfile(config_file):
+        config.read(config_file)
+    else:
+        config["spotify"] = dict()
+        config["libre.fm"] = dict()
 
-    spotify_conf = config["spotify"]
-    auth = SpotifyOAuth(
-        spotify_conf["CLIENT_ID"],
-        spotify_conf["CLIENT_SECRET"],
-        spotify_conf["REDIRECT_URI"],
-        scope=SCOPE,
-        username="666nobody666",
-    )
-    auth.refresh_access_token(auth.get_cached_token()["refresh_token"])
+    try:
+        auth = SpotifyOAuth(
+            kwargs["spotify_client_id"] or config["spotify"]["CLIENT_ID"],
+            kwargs["spotify_client_secret"] or config["spotify"]["CLIENT_SECRET"],
+            kwargs["spotify_redirect_uri"] or config["spotify"]["REDIRECT_URI"],
+            username=kwargs["spotify_user"] or config["spotify"]["USERNAME"],
+            scope="user-read-recently-played",
+        )
+    except KeyError as err:
+        print(f"Missing Spotify config/parameter {err}")
+        sys.exit(1)
+
+    if kwargs["force_refresh_token"]:
+        auth.refresh_access_token(auth.get_cached_token()["refresh_token"])
     spotify = Spotify(auth_manager=auth)
 
     print("Searching recent tracks")
-    spotify_tracks = []
-    last_timestamp = spotify_conf.get("LAST_TIMESTAMP")
-    more_items = True
-    while more_items:
-        recent_tracks = spotify.current_user_recently_played(after=last_timestamp)
-        spotify_tracks.extend(recent_tracks["items"])
-        more_items = len(recent_tracks["items"])
-        cursors = recent_tracks["cursors"]
-        last_timestamp = cursors["after"] if cursors is not None else last_timestamp
+    try:
+        if kwargs["search_after"]:
+            last_timestamp = int(datetime.strptime(kwargs["search_after"], kwargs["search_after_fmt"]).timestamp() * 1000)
+        else:
+            last_timestamp = kwargs["last_timestamp"] or config["spotify"]["LAST_TIMESTAMP"]
+    except KeyError:
+        print("No last-timestamp/search-after specified!")
+        sys.exit(1)
+    recent_tracks = spotify.current_user_recently_played(after=last_timestamp)
+    cursors = recent_tracks["cursors"]
+    last_timestamp = cursors["after"] if cursors is not None else last_timestamp
     config["spotify"]["LAST_TIMESTAMP"] = last_timestamp
-    print(f"Found {len(spotify_tracks)} to scrobble!")
+    tracks_file = kwargs["tracks_file"]
+    spotify_tracks = recent_tracks["items"]
+    if kwargs["scrobble_remaining"] and os.path.isfile(tracks_file):
+        with open(tracks_file, "rb") as pickle_file:
+            spotify_tracks.extend(pickle.load(pickle_file))
+    print(f"Found {len(spotify_tracks)} tracks to scrobble!")
 
     print("Organizing tracks...")
     tracks = []
@@ -55,21 +89,26 @@ if __name__ == "__main__":
             }
             tracks.append(track_info)
         except Exception as err:
-            print("ERROR!")
+            print("Error reading track metadata")
             print(err)
             print(track)
-            exit(1)
+            print(f"Saving non-scrobbled tracks to {tracks_file}")
+            save_tracks(tracks_file, spotify_tracks)
+            sys.exit(1)
 
     librefm_auth = {key.lower(): value for key, value in config["libre.fm"].items()}
+    librefm_auth["username"] = kwargs["librefm_user"] or librefm_auth["username"]
+    librefm_auth["password_hash"] = md5(kwargs["librefm_password"].encode("utf8")) if kwargs["librefm_password"] else librefm_auth["password_hash"]
     if tracks:
-        while True:
+        tries = 10
+        while tries:
+            tries -= 1
             librefm = LibreFMNetwork(**librefm_auth)
             print("Scrobbling tracks...")
             try:
                 librefm.scrobble_many(tracks)
-            except Exception as err:
-                print("ERROR!")
-                print(err)
+            except WSError:
+                print(f"Error: Invalid session! {tries} tries remaining")
                 print("Getting new session...")
                 skg = SessionKeyGenerator(librefm)
                 url = skg.get_web_auth_url()
@@ -81,7 +120,90 @@ if __name__ == "__main__":
                 print("Scrobbling successful!")
                 config["libre.fm"]["SESSION_KEY"] = librefm_auth["session_key"]
                 break
+        else:
+            print("Scrobbling unsuccessful :(")
+            print(f"Saving non-scrobbled tracks to {tracks_file}")
+            save_tracks(tracks_file, spotify_tracks)
+            sys.exit(1)
 
-    with open(CONFIG_FILENAME, "w") as config_file:
-        config.write(config_file)
-    print("Saved config file! ;)")
+    if kwargs["write_config"]:
+        with open(config_file, "w") as config_file:
+            config.write(config_file)
+        print("Saved config file! ;)")
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.set_defaults(func=main)
+    subparsers = parser.add_subparsers()
+
+    scrobble_parser = subparsers.add_parser(
+        "scrobble",
+        help="Scrobble your Spotify's recently played tracks to libre.fm",
+    )
+    scrobble_parser.add_argument(
+        "-c",
+        "--config",
+        default="config.ini",
+        help="Config file to read script parameters (default: %(default)s)",
+    )
+    scrobble_parser.add_argument("--no-write-config", dest="write_config", action="store_false", help="Don't write to config at the end")
+    scrobble_parser.add_argument("--tracks-file", default=".tracks.pickle", help="File to save non-scrobbled tracks in case of any error")
+    scrobble_parser.add_argument("--ignore-tracks-file", dest="scrobble_remaining", action="store_false", help="Don't try to scrobble remaining tracks saved on tracks-file")
+
+    spotify_group = scrobble_parser.add_argument_group(
+        "Spotify", description="Spotify related parameters"
+    )
+    spotify_group.add_argument("--spotify-user", help="Your Spotify username")
+    spotify_group.add_argument(
+        "--spotify-redirect-uri",
+        default="http://localhost",
+        help="Spotify redirect URI set on your Spotify Developer's page - doesn't need to be accessible (default: %(default)s)",
+    )
+    spotify_group.add_argument("--spotify-client-id", help="Your Spotify Client ID")
+    spotify_group.add_argument(
+        "--spotify-client-secret", help="Your Spotify Client Secret"
+    )
+    spotify_group.add_argument("--force-refresh-token", action="store_true", help="Force refresh your Spotify Client Token before starting the routine")
+    last_played = spotify_group.add_mutually_exclusive_group()
+    last_played.add_argument(
+        "--last-timestamp",
+        type=int,
+        help="UNIX timestamp (milliseconds) representing the date and time you listened the last scrobbled Spotify track",
+    )
+    last_played.add_argument(
+        "--search-after",
+        help="Only tracks played after this date and time will be scrobbled. Must follow search-after-fmt format",
+    )
+    spotify_group.add_argument(
+        "--search-after-fmt",
+        default="%Y-%m-%dT%H:%M:%S.%f%z",
+        help="Datetime format (in strftime syntax) for search-after (default: %(default)s)",
+    )
+
+    librefm_group = scrobble_parser.add_argument_group(
+        "Libre.fm", description="Libre.fm related parameters"
+    )
+    librefm_group.add_argument("--librefm-user", help="Your Libre.fm username")
+    librefm_group.add_argument("--librefm-password", help="Your Libre.fm password")
+
+    init_parser = subparsers.add_parser(
+        "init", help="CLI wizard to generate a config file"
+    )
+    init_parser.add_argument(
+        "config_file",
+        nargs="?",
+        default="config.ini",
+        help="Config file to save settings (default: %(default)s)",
+    )
+    init_parser.set_defaults(func=init_config)
+
+    help_parser = subparsers.add_parser(
+        "help",
+        help="Show the complete help message for all commands",
+        add_help=False,
+    )
+    help_parser.set_defaults(func=lambda **kwargs: print(f"{scrobble_parser.format_help()}\n{'-'*27}\n{init_parser.format_help()}"))
+
+    args = parser.parse_args()
+    args.func(**vars(args))
