@@ -134,13 +134,13 @@ def main(**kwargs):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.set_defaults(func=main)
     subparsers = parser.add_subparsers()
 
     scrobble_parser = subparsers.add_parser(
         "scrobble",
         help="Scrobble your Spotify's recently played tracks to libre.fm",
     )
+    scrobble_parser.set_defaults(func=main)
     scrobble_parser.add_argument(
         "-c",
         "--config",
@@ -206,4 +206,8 @@ if __name__ == "__main__":
     help_parser.set_defaults(func=lambda **kwargs: print(f"{scrobble_parser.format_help()}\n{'-'*27}\n{init_parser.format_help()}"))
 
     args = parser.parse_args()
-    args.func(**vars(args))
+    kwargs = vars(args)
+    if kwargs:
+        args.func(**vars(args))
+    else:
+        parser.print_help()
