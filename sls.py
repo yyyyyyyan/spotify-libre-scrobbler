@@ -274,8 +274,8 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    kwargs = vars(args)
-    if kwargs:
-        args.func(**vars(args))
+    dict_args = vars(args)
+    if dict_args:
+        args.func(**dict_args)
     else:
         parser.print_help()
