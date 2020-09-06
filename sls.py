@@ -83,6 +83,7 @@ def main(**kwargs):
             kwargs["spotify_client_secret"] or config["spotify"]["CLIENT_SECRET"],
             kwargs["spotify_redirect_uri"] or config["spotify"]["REDIRECT_URI"],
             username=kwargs["spotify_user"] or config["spotify"]["USERNAME"],
+            cache_path=kwargs["cache_path"] or config["spotify"]["CACHE_PATH"],
             scope="user-read-recently-played",
         )
     except KeyError as err:
@@ -217,6 +218,7 @@ if __name__ == "__main__":
         "Spotify", description="Spotify related parameters"
     )
     spotify_group.add_argument("--spotify-user", help="Your Spotify username")
+    spotify_group.add_argument("--cache-path", help="Spotify's cache path")
     spotify_group.add_argument(
         "--spotify-redirect-uri",
         default="http://localhost",
